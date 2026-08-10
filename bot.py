@@ -29,6 +29,7 @@ Deploy on Railway:
 
 import asyncio
 import html
+import json
 import logging
 import os
 import sqlite3
@@ -61,22 +62,14 @@ log = logging.getLogger(__name__)
 # CONFIG — edit these
 # ======================================================================
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8495656887:AAHaeHqi77k3ASgGJ4G2_-GfuxJbzO7Cejw")
-BOT_USERNAME = "your_bot_username"          # without @, used to build referral links
+BOT_USERNAME = "liesworlds2bot"          # without @, used to build referral links
 OWNER_ID = 8790645158                       # your numeric Telegram user ID (gets new-user notifications + admin access)
 
-# Channels users must join before using the bot.
-# chat_id: the channel's numeric ID (e.g. -1001234567890) or "@channelusername".
-# For a PUBLIC channel, "@username" works directly.
-# For a PRIVATE channel (invite-link only, like channel 2 below), get_chat_member
-# needs the numeric chat_id, not the invite link. To find it:
-#   1. Add the bot as an ADMIN in that private channel
-#   2. Forward any message from that channel to @userinfobot (or @JsonDumpBot)
-#      — it'll show you the channel's numeric ID (starts with -100)
-#   3. Paste that number below in place of "REPLACE_WITH_NUMERIC_CHAT_ID"
-FORCE_CHANNELS = [
-    {"name": "CHANNEL 1", "url": "https://t.me/liesworlds2", "chat_id": "@liesworlds2"},
-    {"name": "CHANNEL 2", "url": "https://t.me/+r2ruzqH4m441YjE1", "chat_id": "REPLACE_WITH_NUMERIC_CHAT_ID"},
-]
+# Force-join channels are now managed entirely through the admin panel —
+# use /addchannel (or the 📢 Channels button in /admin) instead of editing
+# code here. This list is only used to seed the database the very first
+# time the bot runs; leave it empty and add channels via the bot itself.
+FORCE_CHANNELS = []
 
 SUBSCRIPTION_CONTACT = "@liesworlds"
 DEVELOPER_CONTACT = "@liesworlds"
@@ -85,12 +78,41 @@ CREDITS_PER_REFERRAL = 2
 CREDITS_PER_USE = 1
 CREDITS_ON_SIGNUP = 2   # free credits given the first time a user verifies
 
-# 4 APIs — replace URL with your own. Remove the Authorization header
-# entirely (see the # EDIT HERE comments below) if your API needs no key.
-API_1_URL = "https://api-one.example.com/generate"
-API_2_URL = "https://api-two.example.com/generate"
-API_3_URL = "https://api-three.example.com/generate"
-API_4_URL = "https://api-four.example.com/generate"
+# 4 (or however many you want) APIs — each can have a totally different
+# shape. For each one, set:
+#   method       "GET" or "POST"
+#   param_style  "query"  -> code sent as ?code=VALUE
+#                "json"   -> code sent as JSON body {"code": "VALUE"}
+#                "path"   -> code appended to the URL, e.g. .../generate/VALUE
+#                "none"   -> no code sent at all, just calls the URL as-is
+#   param_name   the field/param name your API expects (default "code")
+#   headers      optional dict, e.g. {"Authorization": "Bearer XXX"} if your
+#                API needs a key
+#
+# Add, remove, or edit entries freely — the bot adapts automatically,
+# and the progress screen + results message scale to however many you list.
+API_CONFIGS = [
+    {
+        "emoji": "🪄", "name": "Casting Magic",
+        "url": "https://eren-h785.onrender.com/bomb",
+        "method": "GET", "param_style": "path",
+    },
+    {
+        "emoji": "🍳", "name": "Cooking Pixels",
+        "url": "https://immortalbomberpart-2.onrender.com/bomb",
+        "method": "GET", "param_style": "query", "param_name": "app",
+    },
+    {
+        "emoji": "🛸", "name": "Beaming from Space",
+        "url": "https://bomber-production-d127.up.railway.app//bomber",
+        "method": "GET", "param_style": "query", "param_name": "app",
+    },
+    {
+        "emoji": "🎉", "name": "Adding Sparkle",
+        "url": "https://newbomb-production.up.railway.app//bomb",
+        "method": "GET", "param_style": "query", "param_name": "app",
+    },
+]
 
 # Video shown at the top of the "My Profile" dashboard (premium feel).
 # Easiest: send your video to your bot once in a private chat, check the
@@ -130,10 +152,38 @@ def db_init() -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admins (
+            user_id INTEGER PRIMARY KEY,
+            added_by INTEGER
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS force_channels (
+            chat_id TEXT PRIMARY KEY,
+            name TEXT,
+            url TEXT
+        )
+        """
+    )
     # Lightweight migration in case an older bot.db already exists without `premium`
     cols = [r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
     if "premium" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN premium INTEGER DEFAULT 0")
+
+    # Seed force_channels from the hardcoded FORCE_CHANNELS list once, so
+    # channels already configured in code aren't lost when this table is new.
+    existing_count = conn.execute("SELECT COUNT(*) FROM force_channels").fetchone()[0]
+    if existing_count == 0:
+        for ch in FORCE_CHANNELS:
+            conn.execute(
+                "INSERT OR IGNORE INTO force_channels (chat_id, name, url) VALUES (?, ?, ?)",
+                (str(ch["chat_id"]), ch["name"], ch["url"]),
+            )
+
     conn.commit()
     conn.close()
 
@@ -158,6 +208,68 @@ def db_set_setting(key: str, value: str) -> None:
 
 def is_bot_enabled() -> bool:
     return db_get_setting("bot_enabled", "1") == "1"
+
+
+def db_is_admin(user_id: int) -> bool:
+    if user_id == OWNER_ID:
+        return True
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute("SELECT 1 FROM admins WHERE user_id = ?", (user_id,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def db_add_admin(user_id: int, added_by: int) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT OR IGNORE INTO admins (user_id, added_by) VALUES (?, ?)",
+        (user_id, added_by),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_remove_admin(user_id: int) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.execute("DELETE FROM admins WHERE user_id = ?", (user_id,))
+    conn.commit()
+    removed = cur.rowcount > 0
+    conn.close()
+    return removed
+
+
+def db_list_admins() -> list:
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute("SELECT user_id FROM admins").fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
+def db_add_force_channel(chat_id, name: str, url: str) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT INTO force_channels (chat_id, name, url) VALUES (?, ?, ?) "
+        "ON CONFLICT(chat_id) DO UPDATE SET name = excluded.name, url = excluded.url",
+        (str(chat_id), name, url),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_remove_force_channel(chat_id) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.execute("DELETE FROM force_channels WHERE chat_id = ?", (str(chat_id),))
+    conn.commit()
+    removed = cur.rowcount > 0
+    conn.close()
+    return removed
+
+
+def db_list_force_channels() -> list:
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute("SELECT chat_id, name, url FROM force_channels").fetchall()
+    conn.close()
+    return [{"chat_id": r[0], "name": r[1], "url": r[2]} for r in rows]
 
 
 def db_get_user(user_id: int):
@@ -235,50 +347,47 @@ db_init()
 
 
 # ---------------------------------------------------------------------
-# API calls — each returns the raw JSON response as a dict, e.g.
-# {"status": "ok", "data": "..."}. Adjust the payload below to match
-# what your real APIs expect.
+# One generic caller that adapts to whatever each API_CONFIGS entry says
+# (GET/POST, query/json/path param, custom headers). Returns the parsed
+# JSON, or {"data": <raw text>} if the response isn't valid JSON.
 # ---------------------------------------------------------------------
-async def call_api_1(code: str) -> dict:
+async def call_generic_api(cfg: dict, code: str) -> dict:
+    method = cfg.get("method", "GET").upper()
+    style = cfg.get("param_style", "query")
+    param_name = cfg.get("param_name", "code")
+    headers = cfg.get("headers") or {}
+    url = cfg["url"]
+
     async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(
-            API_1_URL,
-            # headers={"Authorization": f"Bearer {API_1_KEY}"},  # EDIT HERE: remove if no key needed
-            json={"code": code},
-        )
+        if style == "path":
+            url = f"{url.rstrip('/')}/{code}"
+
+        if method == "GET":
+            params = {param_name: code} if style == "query" else None
+            resp = await client.get(url, params=params, headers=headers)
+        else:  # POST
+            if style == "json":
+                resp = await client.post(url, json={param_name: code}, headers=headers)
+            elif style == "query":
+                resp = await client.post(url, params={param_name: code}, headers=headers)
+            else:
+                resp = await client.post(url, headers=headers)
+
         resp.raise_for_status()
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError:
+            return {"data": resp.text}
 
 
-async def call_api_2(code: str) -> dict:
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(API_2_URL, json={"code": code})
-        resp.raise_for_status()
-        return resp.json()
-
-
-async def call_api_3(code: str) -> dict:
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(API_3_URL, json={"code": code})
-        resp.raise_for_status()
-        return resp.json()
-
-
-async def call_api_4(code: str) -> dict:
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(API_4_URL, json={"code": code})
-        resp.raise_for_status()
-        return resp.json()
-
-
-API_FUNCS = [call_api_1, call_api_2, call_api_3, call_api_4]
+API_FUNCS = [lambda code, cfg=cfg: call_generic_api(cfg, code) for cfg in API_CONFIGS]
 
 
 # ---------------------------------------------------------------------
 # Keyboards
 # ---------------------------------------------------------------------
 def join_keyboard() -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(f"📢 {c['name']}", url=c["url"])] for c in FORCE_CHANNELS]
+    rows = [[InlineKeyboardButton(f"📢 {c['name']}", url=c["url"])] for c in db_list_force_channels()]
     rows.append([InlineKeyboardButton("✅ Verify", callback_data="verify")])
     return InlineKeyboardMarkup(rows)
 
@@ -313,13 +422,6 @@ def progress_bar(done: int, total: int) -> str:
 
 SPINNER_FRAMES = ["◐", "◓", "◑", "◒"]
 
-MODULES = [
-    {"emoji": "🪄", "name": "Casting Magic"},
-    {"emoji": "🍳", "name": "Cooking Pixels"},
-    {"emoji": "🛸", "name": "Beaming from Space"},
-    {"emoji": "🎉", "name": "Adding Sparkle"},
-]
-
 FUN_TIPS = [
     "🐢 Turbo mode... loading at snail speed 😅",
     "🍕 Order a pizza, this might take a sec...",
@@ -338,7 +440,7 @@ def build_progress_text(done_flags: list, spinner: str, tip: str, elapsed: int) 
     done_count = sum(done_flags)
     total = len(done_flags)
     checklist_lines = []
-    for i, mod in enumerate(MODULES):
+    for i, mod in enumerate(API_CONFIGS):
         if done_flags[i]:
             checklist_lines.append(f"✅ {mod['emoji']} {mod['name']}")
         else:
@@ -358,7 +460,7 @@ def build_progress_text(done_flags: list, spinner: str, tip: str, elapsed: int) 
 # Membership check
 # ---------------------------------------------------------------------
 async def is_member_of_all(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
-    for ch in FORCE_CHANNELS:
+    for ch in db_list_force_channels():
         try:
             member = await context.bot.get_chat_member(ch["chat_id"], user_id)
             if member.status in ("left", "kicked"):
@@ -610,6 +712,20 @@ async def on_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Handle admin forwarding a channel post to register it as a force-join channel
+    if context.user_data.get("awaiting_channel_forward"):
+        fwd_chat = getattr(update.message, "forward_from_chat", None)
+        if fwd_chat and fwd_chat.type == "channel":
+            context.user_data["awaiting_channel_forward"] = False
+            await _try_add_channel(update, context, chat_ref=fwd_chat.id)
+            return
+        else:
+            await update.message.reply_text(
+                "⚠️ That doesn't look like a forwarded channel post. Please forward a message "
+                "directly from the channel, or run /addchannel again to cancel."
+            )
+            return
+
     if not context.user_data.get("awaiting_code"):
         return
 
@@ -639,35 +755,21 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 def format_api_result(mod: dict, response) -> str:
-    """Turn one API's raw JSON response into a clean, readable block.
-    Handles the {"status": ..., "data": ...} shape, but falls back
-    gracefully if the real API sends different or extra fields."""
+    """Show one API's raw JSON response, pretty-printed inside a code
+    block so it's still exact JSON but readable instead of a messy
+    one-liner."""
     if isinstance(response, Exception):
         return f"❌ <b>{mod['emoji']} {html.escape(mod['name'])}</b>\nFailed to fetch a result."
 
-    if not isinstance(response, dict):
-        # Not a dict (plain string/number/list) — just show it as-is
-        return f"{mod['emoji']} <b>{html.escape(mod['name'])}</b>\n{html.escape(str(response))}"
+    if isinstance(response, (dict, list)):
+        pretty = json.dumps(response, indent=2, ensure_ascii=False)
+    else:
+        pretty = str(response)
 
-    status = response.get("status")
-    data = response.get("data")
-
-    lines = [f"{mod['emoji']} <b>{html.escape(mod['name'])}</b>"]
-
-    if status is not None:
-        status_icon = "✅" if str(status).lower() in ("ok", "success", "true", "1") else "⚠️"
-        lines.append(f"{status_icon} Status: {html.escape(str(status))}")
-
-    if data is not None:
-        lines.append(f"📄 Result: {html.escape(str(data))}")
-
-    # Any other fields the API sent — show them too, generically
-    for key, value in response.items():
-        if key in ("status", "data"):
-            continue
-        lines.append(f"• {html.escape(str(key).capitalize())}: {html.escape(str(value))}")
-
-    return "\n".join(lines)
+    return (
+        f"{mod['emoji']} <b>{html.escape(mod['name'])}</b>\n"
+        f"<pre>{html.escape(pretty)}</pre>"
+    )
 
 
 async def run_all_apis(code, update, context, status_msg, user_id, premium=0) -> None:
@@ -726,7 +828,7 @@ async def run_all_apis(code, update, context, status_msg, user_id, premium=0) ->
             )
             return
 
-        blocks = [format_api_result(MODULES[i], results[i]) for i in range(len(results))]
+        blocks = [format_api_result(API_CONFIGS[i], results[i]) for i in range(len(results))]
         final_text = "🎉 <b>Here are your results!</b>\n\n" + "\n\n".join(blocks)
 
         db_add_credits(user_id, -CREDITS_PER_USE if not premium else 0)
@@ -751,6 +853,15 @@ async def run_all_apis(code, update, context, status_msg, user_id, premium=0) ->
 # ---------------------------------------------------------------------
 def admin_only(func):
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not db_is_admin(update.effective_user.id):
+            await update.message.reply_text("🚫 This command is for admins only.")
+            return
+        return await func(update, context)
+    return wrapper
+
+
+def owner_only(func):
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_user.id != OWNER_ID:
             await update.message.reply_text("🚫 This command is for the bot owner only.")
             return
@@ -758,20 +869,140 @@ def admin_only(func):
     return wrapper
 
 
+def admin_panel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("💰 Credits", callback_data="adm_credits"),
+             InlineKeyboardButton("💎 Premium", callback_data="adm_premium")],
+            [InlineKeyboardButton("📢 Channels", callback_data="adm_channels"),
+             InlineKeyboardButton("👑 Admins", callback_data="adm_admins")],
+            [InlineKeyboardButton("ℹ️ User Info", callback_data="adm_userinfo"),
+             InlineKeyboardButton("⚙️ Bot Status", callback_data="adm_status")],
+        ]
+    )
+
+
+def admin_back_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="adm_home")]])
+
+
 @admin_only
 async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "🛠️ *Admin Panel*\n\n"
-        "`/addcredit <user_id> <amount>` — add credits to a user\n"
-        "`/removecredit <user_id> <amount>` — remove credits from a user\n"
-        "`/setcredit <user_id> <amount>` — set a user's credits to an exact value\n"
-        "`/addpremium <user_id>` — grant premium (unlimited USE, no credit cost)\n"
-        "`/removepremium <user_id>` — revoke premium\n"
-        "`/userinfo <user_id>` — view a user's full profile\n"
-        "`/offbot` — turn the bot OFF for all users (except you)\n"
-        "`/onbot` — turn the bot back ON\n",
+        "🛠️ *Admin Panel*\n\nChoose a category below 👇",
         parse_mode=ParseMode.MARKDOWN,
+        reply_markup=admin_panel_keyboard(),
     )
+
+
+async def on_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    user_id = query.from_user.id
+
+    if not db_is_admin(user_id):
+        await query.answer("🚫 Admins only.", show_alert=True)
+        return
+
+    await query.answer()
+    data = query.data
+    is_owner = user_id == OWNER_ID
+
+    if data == "adm_home":
+        await query.edit_message_text(
+            "🛠️ *Admin Panel*\n\nChoose a category below 👇",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=admin_panel_keyboard(),
+        )
+
+    elif data == "adm_credits":
+        await query.edit_message_text(
+            "💰 *Credit Commands*\n\n"
+            "`/addcredit <user_id> <amount>` — add credits\n"
+            "`/removecredit <user_id> <amount>` — remove credits\n"
+            "`/setcredit <user_id> <amount>` — set exact value",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=admin_back_keyboard(),
+        )
+
+    elif data == "adm_premium":
+        await query.edit_message_text(
+            "💎 *Premium Commands*\n\n"
+            "`/addpremium <user_id>` — grant unlimited USE\n"
+            "`/removepremium <user_id>` — revoke premium",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=admin_back_keyboard(),
+        )
+
+    elif data == "adm_channels":
+        kb = InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("📋 List Channels", callback_data="adm_ch_list")],
+                [InlineKeyboardButton("🔙 Back", callback_data="adm_home")],
+            ]
+        )
+        await query.edit_message_text(
+            "📢 *Channel Commands*\n\n"
+            "`/addchannel @username` — add a public channel\n"
+            "`/addchannel` (no args) — then forward a post to add a private channel\n"
+            "`/removechannel <chat_id>` — remove a channel\n\n"
+            "⚠️ Bot must already be an admin in that channel first.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=kb,
+        )
+
+    elif data == "adm_ch_list":
+        channels = db_list_force_channels()
+        if not channels:
+            text = "📭 No force-join channels configured yet."
+        else:
+            lines = [f"📢 *{c['name']}*\nID: `{c['chat_id']}`" for c in channels]
+            text = "📋 *Required Channels*\n\n" + "\n\n".join(lines)
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=admin_back_keyboard())
+
+    elif data == "adm_admins":
+        kb = InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("📋 List Admins", callback_data="adm_ad_list")],
+                [InlineKeyboardButton("🔙 Back", callback_data="adm_home")],
+            ]
+        )
+        text = "👑 *Admin Commands*"
+        if is_owner:
+            text += "\n\n`/addadmin <user_id>` — grant admin access\n`/removeadmin <user_id>` — revoke access"
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
+
+    elif data == "adm_ad_list":
+        admin_ids = db_list_admins()
+        lines = [f"👑 `{OWNER_ID}` (owner)"] + [f"🛠️ `{aid}`" for aid in admin_ids]
+        await query.edit_message_text(
+            "📋 *Current Admins*\n\n" + "\n".join(lines),
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=admin_back_keyboard(),
+        )
+
+    elif data == "adm_userinfo":
+        await query.edit_message_text(
+            "ℹ️ *User Info*\n\n`/userinfo <user_id>` — view a user's full profile",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=admin_back_keyboard(),
+        )
+
+    elif data in ("adm_status", "adm_toggle"):
+        if data == "adm_toggle":
+            db_set_setting("bot_enabled", "0" if is_bot_enabled() else "1")
+        enabled = is_bot_enabled()
+        status_text = "🟢 ON" if enabled else "🔴 OFF"
+        kb = InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("🔴 Turn OFF" if enabled else "🟢 Turn ON", callback_data="adm_toggle")],
+                [InlineKeyboardButton("🔙 Back", callback_data="adm_home")],
+            ]
+        )
+        await query.edit_message_text(
+            f"⚙️ *Bot Status:* {status_text}",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=kb,
+        )
 
 
 @admin_only
@@ -907,13 +1138,163 @@ async def admin_onbot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
 
 
+@owner_only
+async def admin_addadmin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        target_id = int(context.args[0])
+    except (IndexError, ValueError):
+        await update.message.reply_text("⚠️ Usage: `/addadmin <user_id>`", parse_mode=ParseMode.MARKDOWN)
+        return
+
+    db_add_admin(target_id, update.effective_user.id)
+    await update.message.reply_text(
+        f"✅ `{target_id}` is now an *admin* and can use the admin panel.",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    try:
+        await context.bot.send_message(
+            target_id,
+            "🛠️ *You've been granted admin access!*\n\nSend /admin to see what you can do.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+    except Exception as e:
+        log.warning("Could not notify new admin: %s", e)
+
+
+@owner_only
+async def admin_removeadmin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        target_id = int(context.args[0])
+    except (IndexError, ValueError):
+        await update.message.reply_text("⚠️ Usage: `/removeadmin <user_id>`", parse_mode=ParseMode.MARKDOWN)
+        return
+
+    if target_id == OWNER_ID:
+        await update.message.reply_text("🚫 The owner can't be removed as admin.")
+        return
+
+    if not db_remove_admin(target_id):
+        await update.message.reply_text("❌ That user isn't an admin.")
+        return
+
+    await update.message.reply_text(f"✅ `{target_id}` is no longer an admin.", parse_mode=ParseMode.MARKDOWN)
+
+
+@admin_only
+async def admin_listadmins(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    admin_ids = db_list_admins()
+    lines = [f"👑 `{OWNER_ID}` (owner)"] + [f"🛠️ `{aid}`" for aid in admin_ids]
+    await update.message.reply_text(
+        "📋 *Current Admins*\n\n" + "\n".join(lines),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+
+@admin_only
+async def admin_addchannel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.args:
+        context.user_data["awaiting_channel_forward"] = True
+        await update.message.reply_text(
+            "📢 *Add a Force-Join Channel*\n\n"
+            "For a *public* channel, send:\n"
+            "`/addchannel @channelusername`\n"
+            "or `/addchannel https://t.me/channelusername`\n\n"
+            "For a *private* channel (invite-link only), just *forward any post* "
+            "from that channel to me right now instead 👇\n\n"
+            "⚠️ In both cases, make sure the bot is already an *admin* in that channel first!",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+
+    raw = context.args[0]
+    username = raw.replace("https://t.me/", "").replace("http://t.me/", "").lstrip("@").strip()
+
+    if username.startswith("+") or "joinchat" in username:
+        await update.message.reply_text(
+            "⚠️ That's a private invite link — I can't resolve it directly.\n\n"
+            "Please run `/addchannel` with no arguments and *forward a post* from that channel instead.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+
+    await _try_add_channel(update, context, chat_ref=f"@{username}")
+
+
+async def _try_add_channel(update, context, chat_ref) -> None:
+    try:
+        chat = await context.bot.get_chat(chat_ref)
+    except Exception as e:
+        await update.message.reply_text(f"❌ Couldn't find that channel. Make sure the link is correct.\n\n`{e}`", parse_mode=ParseMode.MARKDOWN)
+        return
+
+    try:
+        bot_member = await context.bot.get_chat_member(chat.id, context.bot.id)
+        if bot_member.status not in ("administrator", "creator"):
+            await update.message.reply_text(
+                f"⚠️ *{chat.title}* found, but I'm not an admin there yet.\n\n"
+                "Please make the bot an admin in that channel, then try again.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ Couldn't verify bot admin status in *{chat.title}*.\n\n`{e}`",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+
+    url = f"https://t.me/{chat.username}" if chat.username else (chat.invite_link or "")
+    if not url:
+        try:
+            url = await context.bot.export_chat_invite_link(chat.id)
+        except Exception:
+            url = ""
+
+    db_add_force_channel(chat.id, chat.title, url)
+    await update.message.reply_text(
+        f"✅ *{chat.title}* added to the required channels list! 🎉",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=back_keyboard(),
+    )
+
+
+@admin_only
+async def admin_removechannel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        chat_id = context.args[0]
+    except IndexError:
+        await update.message.reply_text("⚠️ Usage: `/removechannel <chat_id>` — see /listchannels for IDs", parse_mode=ParseMode.MARKDOWN)
+        return
+
+    if not db_remove_force_channel(chat_id):
+        await update.message.reply_text("❌ No channel found with that ID.")
+        return
+
+    await update.message.reply_text("✅ Channel removed from the required list.")
+
+
+@admin_only
+async def admin_listchannels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    channels = db_list_force_channels()
+    if not channels:
+        await update.message.reply_text("📭 No force-join channels configured yet. Use /addchannel to add one.")
+        return
+
+    lines = [f"📢 *{c['name']}*\n   ID: `{c['chat_id']}`\n   {c['url']}" for c in channels]
+    await update.message.reply_text(
+        "📋 *Required Channels*\n\n" + "\n\n".join(lines),
+        parse_mode=ParseMode.MARKDOWN,
+        disable_web_page_preview=True,
+    )
+
+
 # ---------------------------------------------------------------------
 # Maintenance-mode gate — runs before every other handler
 # ---------------------------------------------------------------------
 async def maintenance_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
-    if user and user.id == OWNER_ID:
-        return  # owner always has access, even while bot is "off"
+    if user and db_is_admin(user.id):
+        return  # admins always have access, even while bot is "off"
 
     if not is_bot_enabled():
         if update.callback_query:
@@ -944,6 +1325,13 @@ def main() -> None:
     app.add_handler(CommandHandler("userinfo", admin_userinfo))
     app.add_handler(CommandHandler("offbot", admin_offbot))
     app.add_handler(CommandHandler("onbot", admin_onbot))
+    app.add_handler(CommandHandler("addadmin", admin_addadmin))
+    app.add_handler(CommandHandler("removeadmin", admin_removeadmin))
+    app.add_handler(CommandHandler("listadmins", admin_listadmins))
+    app.add_handler(CommandHandler("addchannel", admin_addchannel))
+    app.add_handler(CommandHandler("removechannel", admin_removechannel))
+    app.add_handler(CommandHandler("listchannels", admin_listchannels))
+    app.add_handler(CallbackQueryHandler(on_admin_callback, pattern="^adm_"))
     app.add_handler(CallbackQueryHandler(on_verify, pattern="^verify$"))
     app.add_handler(CallbackQueryHandler(on_menu, pattern="^menu$"))
     app.add_handler(CallbackQueryHandler(on_refer, pattern="^refer$"))

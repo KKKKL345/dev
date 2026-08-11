@@ -54,14 +54,14 @@ API_CONFIGS = [
     {
         "emoji": "🪄", "name": "Casting Magic",
         "url": "https://newbomb-production.up.railway.app//bomb",
-        "method": "GET", "param_style": "query", "param_name": "number",
+        "method": "GET", "param_style": "query", "param_name": "phone",
     },
     # API 2 temporarily disabled (500 Internal Server Error on server side)
     # Re-enable when your Railway API server is fixed:
     # {
     #     "emoji": "🎉", "name": "Adding Sparkle",
     #     "url": "https://REPLACE_DOMAIN_2.com/values",
-    #     "method": "GET", "param_style": "query", "param_name": "number",
+    #     "method": "GET", "param_style": "query", "param_name": "phone",
     # },
 ]
 
@@ -170,7 +170,7 @@ db_init()
 async def call_api(cfg: dict, code: str) -> dict:
     method = cfg.get("method","GET").upper()
     style  = cfg.get("param_style","query")
-    pname  = cfg.get("param_name","number")
+    pname  = cfg.get("param_name","phone")
     hdrs   = cfg.get("headers") or {}
     url    = cfg["url"]
 
@@ -921,7 +921,7 @@ async def admin_apitest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i, cfg in enumerate(API_CONFIGS):
         method = cfg.get("method","GET").upper()
         style  = cfg.get("param_style","query")
-        pname  = cfg.get("param_name","number")
+        pname  = cfg.get("param_name","phone")
         url    = cfg["url"]
 
         # Build what the actual URL will look like

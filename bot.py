@@ -37,7 +37,7 @@ log = logging.getLogger(__name__)
 # ======================================================================
 # CONFIG — edit these
 # ======================================================================
-BOT_TOKEN      = os.environ.get("BOT_TOKEN", "8495656887:AAHaeHqi77k3ASgGJ4G2_-GfuxJbzO7Cejw")
+BOT_TOKEN      = os.environ.get("BOT_TOKEN", "8495656887:AAErNENGMYE-MU4j2jpouTuP32Slxi87ug8")
 BOT_USERNAME   = "liesworlds2bot"
 OWNER_ID       = 8790645158
 
@@ -53,17 +53,17 @@ CREDITS_ON_SIGNUP    = 2
 API_CONFIGS = [
     {
         "emoji": "🪄", "name": "Casting Magic",
-        "url": "https://bomber-production-d127.up.railway.app//bomber",
+        "url": "https://newbomb-production.up.railway.app//bomb",
         "method": "GET", "param_style": "query", "param_name": "number",
     },
     {
-        "emoji": "🍳", "name": "Cooking Pixels",
+        "emoji": "🍳", "name": "Cooking victim",
         "url": "https://bomber-production-d127.up.railway.app//bomber",
         "method": "GET", "param_style": "query", "param_name": "number",
     },
     {
         "emoji": "🎉", "name": "Adding Sparkle",
-        "url": "https://bomber-production-d127.up.railway.app//bomber",
+        "url": "https://newbomb-production.up.railway.app//bomb",
         "method": "GET", "param_style": "query", "param_name": "number",
     },
 ]
@@ -186,19 +186,35 @@ async def call_api(cfg: dict, code: str) -> dict:
         else:
             params = None
 
-        if method == "GET":
-            resp = await client.get(url, params=params, headers=hdrs)
-        else:
-            if style == "json":
-                resp = await client.post(url, json={pname: code}, headers=hdrs)
-            else:
-                resp = await client.post(url, params=params, headers=hdrs)
-
-        resp.raise_for_status()
         try:
-            return resp.json()
-        except Exception:
-            return {"data": resp.text}
+            if method == "GET":
+                resp = await client.get(url, params=params, headers=hdrs)
+            else:
+                if style == "json":
+                    resp = await client.post(url, json={pname: code}, headers=hdrs)
+                else:
+                    resp = await client.post(url, params=params, headers=hdrs)
+
+            # Log actual URL called (helps debug)
+            log.info("API call: %s %s → status %s", method, resp.url, resp.status_code)
+
+            # Try JSON first, fallback to raw text — never raise, always return something
+            try:
+                data = resp.json()
+                data["_status_code"] = resp.status_code
+                return data
+            except Exception:
+                return {"data": resp.text, "_status_code": resp.status_code}
+
+        except httpx.ConnectError as e:
+            log.error("API connect error %s: %s", url, e)
+            return {"error": f"Connection failed: {e}"}
+        except httpx.TimeoutException:
+            log.error("API timeout %s", url)
+            return {"error": "Request timed out"}
+        except Exception as e:
+            log.error("API unknown error %s: %s", url, e)
+            return {"error": str(e)}
 
 API_FUNCS = [lambda code, c=cfg: call_api(c, code) for cfg in API_CONFIGS]
 
@@ -565,13 +581,18 @@ async def on_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # API runner
 # -----------------------------------------------------------------------
 def format_result(cfg, response) -> str:
-    if isinstance(response, Exception):
-        return f"❌ <b>{html.escape(cfg['emoji'])} {html.escape(cfg['name'])}</b>\nFailed to fetch result."
-    if isinstance(response, (dict, list)):
-        pretty = json.dumps(response, indent=2, ensure_ascii=False)
-    else:
-        pretty = str(response)
-    return f"{cfg['emoji']} <b>{html.escape(cfg['name'])}</b>\n<pre>{html.escape(pretty)}</pre>"
+    emoji = cfg['emoji']
+    name  = html.escape(cfg['name'])
+
+    if not isinstance(response, dict):
+        return f"{emoji} <b>{name}</b>\n<pre>{html.escape(str(response))}</pre>"
+
+    # Pull out meta fields we added
+    status_code = response.pop("_status_code", None)
+    sc_line = f" <i>(HTTP {status_code})</i>" if status_code else ""
+
+    pretty = json.dumps(response, indent=2, ensure_ascii=False)
+    return f"{emoji} <b>{name}</b>{sc_line}\n<pre>{html.escape(pretty)}</pre>"
 
 
 async def run_all_apis(code, update, context, status_msg, user_id, premium=0):
@@ -621,15 +642,9 @@ async def run_all_apis(code, update, context, status_msg, user_id, premium=0):
             except Exception:
                 pass
 
-            if all(isinstance(r, Exception) for r in results):
-                blocks = "⚠️ <b>All APIs failed this round.</b>"
-            else:
-                blocks = [format_result(API_CONFIGS[i], results[i]) for i in range(len(results))]
-                blocks = (
-                    f"🔄 <b>Round {round_num} — Results</b>\n\n"
-                    + "\n\n".join(blocks)
-                )
-
+            # Now results are always dicts (never exceptions) — just format them
+            formatted = [format_result(API_CONFIGS[i], results[i]) for i in range(len(results))]
+            blocks = f"🔄 <b>Round {round_num} — Results</b>\n\n" + "\n\n".join(formatted)
             db_add_credits(user_id, -CREDITS_PER_USE if not premium else 0)
 
             # Edit existing result message or create a new quoted one
@@ -890,6 +905,22 @@ async def admin_clearvideo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Dashboard video removed. Profile will show text only.")
 
 
+@admin_only
+async def admin_apitest(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Test all APIs with a dummy code and show raw response."""
+    test_code = context.args[0] if context.args else "1234567890"
+    msg = await update.message.reply_text(f"🧪 Testing all {len(API_CONFIGS)} APIs with code `{test_code}`...", parse_mode=ParseMode.MARKDOWN)
+    lines = []
+    for i, cfg in enumerate(API_CONFIGS):
+        try:
+            result = await call_api(cfg, test_code)
+            pretty = json.dumps(result, indent=2, ensure_ascii=False)
+            lines.append(f"{cfg['emoji']} <b>{html.escape(cfg['name'])}</b>\n<pre>{html.escape(pretty[:300])}</pre>")
+        except Exception as e:
+            lines.append(f"❌ <b>{html.escape(cfg['name'])}</b>\n<code>{html.escape(str(e))}</code>")
+    await msg.edit_text("🧪 <b>API Test Results</b>\n\n" + "\n\n".join(lines), parse_mode=ParseMode.HTML)
+
+
 async def _try_add_channel(update, context, chat_ref):
     try:
         chat = await context.bot.get_chat(chat_ref)
@@ -1033,6 +1064,7 @@ def main():
     app.add_handler(CommandHandler("listchannels", admin_listchannels))
     app.add_handler(CommandHandler("setvideo", admin_setvideo))
     app.add_handler(CommandHandler("clearvideo", admin_clearvideo))
+    app.add_handler(CommandHandler("apitest", admin_apitest))
 
     # Inline callbacks
     app.add_handler(CallbackQueryHandler(on_verify,       pattern="^verify$"))

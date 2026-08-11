@@ -401,6 +401,8 @@ async def on_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # -----------------------------------------------------------------------
 # Reply keyboard message handler
 # -----------------------------------------------------------------------
+MENU_BUTTONS = {"🚀 USE", "✨ PREMIUM USE", "🎁 Refer & Earn", "👤 My Profile", "💎 Subscription", "👨‍💻 Developer"}
+
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     user = update.effective_user
@@ -414,6 +416,10 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("⚠️ Please forward a message directly from the channel.")
         return
+
+    # If user presses a menu button while awaiting code — cancel code flow
+    if context.user_data.get("awaiting_code") and text in MENU_BUTTONS:
+        context.user_data["awaiting_code"] = False
 
     # 10-digit code flow
     if context.user_data.get("awaiting_code"):

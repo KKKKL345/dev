@@ -56,11 +56,13 @@ API_CONFIGS = [
         "url": "https://newbomb-production.up.railway.app//bomb",
         "method": "GET", "param_style": "query", "param_name": "number",
     },
-    {
-        "emoji": "🎉", "name": "Adding Sparkle",
-        "url": "https://bomber-production-d127.up.railway.app//bomber",
-        "method": "GET", "param_style": "query", "param_name": "number",
-    },
+    # API 2 temporarily disabled (500 Internal Server Error on server side)
+    # Re-enable when your Railway API server is fixed:
+    # {
+    #     "emoji": "🎉", "name": "Adding Sparkle",
+    #     "url": "https://REPLACE_DOMAIN_2.com/values",
+    #     "method": "GET", "param_style": "query", "param_name": "number",
+    # },
 ]
 
 # Dashboard video shown in My Profile.
@@ -909,18 +911,45 @@ async def admin_clearvideo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def admin_apitest(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Test all APIs with a dummy code and show raw response."""
+    """Test all APIs with a dummy code and show raw response + exact URL called."""
     test_code = context.args[0] if context.args else "1234567890"
-    msg = await update.message.reply_text(f"🧪 Testing all {len(API_CONFIGS)} APIs with code `{test_code}`...", parse_mode=ParseMode.MARKDOWN)
+    msg = await update.message.reply_text(
+        f"🧪 Testing {len(API_CONFIGS)} APIs with code `{test_code}`...",
+        parse_mode=ParseMode.MARKDOWN,
+    )
     lines = []
     for i, cfg in enumerate(API_CONFIGS):
+        method = cfg.get("method","GET").upper()
+        style  = cfg.get("param_style","query")
+        pname  = cfg.get("param_name","number")
+        url    = cfg["url"]
+
+        # Build what the actual URL will look like
+        if style == "path":
+            preview_url = f"{url.rstrip('/')}/{test_code}"
+        elif style == "query":
+            preview_url = f"{url}?{pname}={test_code}"
+        else:
+            preview_url = url
+
         try:
             result = await call_api(cfg, test_code)
             pretty = json.dumps(result, indent=2, ensure_ascii=False)
-            lines.append(f"{cfg['emoji']} <b>{html.escape(cfg['name'])}</b>\n<pre>{html.escape(pretty[:300])}</pre>")
+            lines.append(
+                f"{cfg['emoji']} <b>{html.escape(cfg['name'])}</b>\n"
+                f"🔗 <code>{html.escape(preview_url)}</code>\n"
+                f"<pre>{html.escape(pretty[:400])}</pre>"
+            )
         except Exception as e:
-            lines.append(f"❌ <b>{html.escape(cfg['name'])}</b>\n<code>{html.escape(str(e))}</code>")
-    await msg.edit_text("🧪 <b>API Test Results</b>\n\n" + "\n\n".join(lines), parse_mode=ParseMode.HTML)
+            lines.append(
+                f"❌ <b>{html.escape(cfg['name'])}</b>\n"
+                f"🔗 <code>{html.escape(preview_url)}</code>\n"
+                f"<code>{html.escape(str(e))}</code>"
+            )
+    await msg.edit_text(
+        "🧪 <b>API Test Results</b>\n\n" + "\n\n".join(lines),
+        parse_mode=ParseMode.HTML,
+    )
 
 
 async def _try_add_channel(update, context, chat_ref):

@@ -57,13 +57,8 @@ API_CONFIGS = [
         "method": "GET", "param_style": "query", "param_name": "number",
     },
     {
-        "emoji": "🍳", "name": "Cooking victim",
-        "url": "https://bomber-production-d127.up.railway.app//bomber",
-        "method": "GET", "param_style": "query", "param_name": "number",
-    },
-    {
         "emoji": "🎉", "name": "Adding Sparkle",
-        "url": "https://newbomb-production.up.railway.app//bomb",
+        "url": "https://bomber-production-d127.up.railway.app//bomber",
         "method": "GET", "param_style": "query", "param_name": "number",
     },
 ]
@@ -264,7 +259,7 @@ def admin_back_keyboard() -> InlineKeyboardMarkup:
 # -----------------------------------------------------------------------
 # Progress helpers
 # -----------------------------------------------------------------------
-SPINNER = ["🌑","🌒","🌓","🌔","🌕","🌖","🌗","🌘"]
+SPINNER = ["🕐","🕑","🕒","🕓","🕔","🕕","🕖","🕗","🕘","🕙","🕚","🕛"]
 TIPS = [
     "🐢 Turbo mode... loading at snail speed 😅",
     "🍕 Order a pizza, this might take a sec...",
@@ -279,7 +274,10 @@ TIPS = [
 ]
 
 def progress_bar(done, total):
-    return "🟩"*done + "⬜️"*(total-done) + f"  {int(done/total*100)}%"
+    filled = "▰" * int((done / total) * 10)
+    empty  = "▱" * (10 - int((done / total) * 10))
+    pct    = int((done / total) * 100)
+    return f"[{filled}{empty}]  {pct}%"
 
 def build_progress(done_flags, spinner, tip, elapsed):
     total = len(done_flags)
@@ -290,11 +288,15 @@ def build_progress(done_flags, spinner, tip, elapsed):
             lines.append(f"  ✅  {cfg['emoji']} {cfg['name']}")
         else:
             lines.append(f"  {spinner}  {cfg['emoji']} {cfg['name']}")
+    checklist = "\n".join(lines)
     return (
-        f"{spinner}{spinner}{spinner} *Processing...* {spinner}{spinner}{spinner}\n\n"
+        f"⚡ *G E N E R A T I N G* ⚡\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"{progress_bar(done, total)}\n\n"
-        + "\n".join(lines)
-        + f"\n\n_{tip}_\n⏱️ {elapsed}s"
+        f"{checklist}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"_{tip}_\n"
+        f"{spinner}  `{elapsed}s elapsed`"
     )
 
 

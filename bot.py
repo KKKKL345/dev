@@ -53,17 +53,17 @@ CREDITS_ON_SIGNUP    = 2
 API_CONFIGS = [
     {
         "emoji": "🪄", "name": "Casting Magic",
-        "url": "https://REPLACE_DOMAIN_1.com/value",
+        "url": "https://bomber-production-d127.up.railway.app//bomber",
         "method": "GET", "param_style": "query", "param_name": "number",
     },
     {
         "emoji": "🍳", "name": "Cooking Pixels",
-        "url": "https://REPLACE_DOMAIN_2.com/value",
+        "url": "https://bomber-production-d127.up.railway.app//bomber",
         "method": "GET", "param_style": "query", "param_name": "number",
     },
     {
         "emoji": "🎉", "name": "Adding Sparkle",
-        "url": "https://REPLACE_DOMAIN_3.com/value",
+        "url": "https://bomber-production-d127.up.railway.app//bomber",
         "method": "GET", "param_style": "query", "param_name": "number",
     },
 ]

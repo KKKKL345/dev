@@ -58,7 +58,7 @@ CREDITS_ON_SIGNUP    = 2
 API_CONFIGS = [
     {
         "emoji": "🪄", "name": "Casting Magic",
-        "url": "https://wtf-production-8350.up.railway.app/bomb",
+        "url": "https://wtf-production-73fd.up.railway.app/bomber",
         "method": "GET", "param_style": "query", "param_name": "phone",
     },
     {

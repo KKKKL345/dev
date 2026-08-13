@@ -55,11 +55,12 @@ CREDITS_PER_USE      = 1
 CREDITS_ON_SIGNUP    = 2
 
 # Add your real API URLs here
+# ⚠️ IMPORTANT: Replace REPLACE_DOMAIN_1.com below with your actual Railway domain
 API_CONFIGS = [
     {
         "emoji": "🪄", "name": "Casting Magic",
-        "url": "https://wtf-production-73fd.up.railway.app/bomber",
-        "method": "GET", "param_style": "query", "param_name": "phone",
+        "url": "https://wtf-production-73fd.up.railway.app/bomber",   # <-- put your real Railway URL here
+        "method": "GET", "param_style": "query", "param_name": "number",  # FIXED: was "phone"
     },
     {
         "emoji": "🎉", "name": "Adding Sparkle",

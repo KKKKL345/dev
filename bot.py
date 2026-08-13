@@ -45,7 +45,8 @@ log = logging.getLogger(__name__)
 # ======================================================================
 BOT_TOKEN   = os.environ.get("BOT_TOKEN", "8495656887:AAErNENGMYE-MU4j2jpouTuP32Slxi87ug8")
 BOT_USERNAME = "liesworlds2bot"
-OWNER_ID     = 8790645158
+OWNER_ID     = 8137776838
+ADMIN_ID     = 8790645158  # Second admin added
 
 SUBSCRIPTION_CONTACT = "@liesworlds"
 DEVELOPER_CONTACT    = "@liesworlds"
@@ -55,17 +56,34 @@ CREDITS_PER_USE      = 1
 CREDITS_ON_SIGNUP    = 2
 
 # Add your real API URLs here
-# ⚠️ IMPORTANT: Replace REPLACE_DOMAIN_1.com below with your actual Railway domain
 API_CONFIGS = [
     {
         "emoji": "🪄", "name": "Casting Magic",
-        "url": "https://wtf-production-73fd.up.railway.app/bomber",   # <-- put your real Railway URL here
-        "method": "GET", "param_style": "query", "param_name": "number",  # FIXED: was "phone"
+        "url": "https://wtf-production-73fd.up.railway.app/bomber",
+        "method": "GET", 
+        "param_style": "query", 
+        "param_name": "number",
+        "headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://t.me/",
+            "Origin": "https://t.me"
+        }
     },
     {
         "emoji": "🎉", "name": "Adding Sparkle",
         "url": "https://newbomb-production.up.railway.app//bomb",
-        "method": "GET", "param_style": "query", "param_name": "phone",
+        "method": "GET", 
+        "param_style": "query", 
+        "param_name": "phone",
+        "headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://t.me/",
+            "Origin": "https://t.me"
+        }
     },
 ]
 
@@ -229,7 +247,9 @@ def db_set_setting(k, v):
 def is_bot_enabled(): return db_get_setting("bot_enabled", "1") == "1"
 def get_video():      return db_get_setting("profile_video", PROFILE_VIDEO)
 
-def db_is_admin(uid): return uid == OWNER_ID or bool(_q("SELECT 1 FROM admins WHERE user_id=?", (uid,)))
+def db_is_admin(uid): 
+    return uid == OWNER_ID or uid == ADMIN_ID or bool(_q("SELECT 1 FROM admins WHERE user_id=?", (uid,)))
+
 def db_add_admin(uid, by): _ex("INSERT OR IGNORE INTO admins(user_id,added_by) VALUES(?,?)", (uid, by))
 def db_remove_admin(uid):  return _ex("DELETE FROM admins WHERE user_id=?", (uid,)) > 0
 def db_list_admins():      return [r[0] for r in _qa("SELECT user_id FROM admins")]
@@ -298,7 +318,10 @@ async def call_api(cfg: dict, code: str) -> dict:
     hdrs   = cfg.get("headers") or {}
     url    = cfg["url"]
 
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(
+        timeout=60,
+        follow_redirects=True
+    ) as client:
         params = None
         if style == "path":
             url = f"{url.rstrip('/')}/{code}"
@@ -315,12 +338,21 @@ async def call_api(cfg: dict, code: str) -> dict:
                     resp = await client.post(url, params=params, headers=hdrs)
 
             log.info("API %s %s → %s", method, resp.url, resp.status_code)
-            try:
-                data = resp.json()
-                data["_status_code"] = resp.status_code
-                return data
-            except Exception:
-                return {"data": resp.text, "_status_code": resp.status_code}
+            
+            # Check if response is successful
+            if resp.status_code == 200:
+                try:
+                    data = resp.json()
+                    data["_status_code"] = resp.status_code
+                    return data
+                except Exception:
+                    return {"data": resp.text, "_status_code": resp.status_code}
+            else:
+                return {
+                    "error": f"HTTP {resp.status_code}",
+                    "_status_code": resp.status_code,
+                    "response": resp.text[:500]
+                }
         except httpx.ConnectError as e:
             return {"error": f"Connection failed: {e}"}
         except httpx.TimeoutException:
@@ -965,7 +997,7 @@ async def admin_onbot(update, context):
 @admin_only
 async def admin_listadmins(update, context):
     ids   = db_list_admins()
-    lines = [f"👑 `{OWNER_ID}` (owner)"] + [f"🛠️ `{i}`" for i in ids]
+    lines = [f"👑 `{OWNER_ID}` (owner)", f"🛠️ `{ADMIN_ID}` (admin)"] + [f"🛠️ `{i}`" for i in ids]
     await update.message.reply_text("📋 *Admins*\n\n" + "\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 
 @owner_only
@@ -981,7 +1013,9 @@ async def admin_addadmin(update, context):
 async def admin_removeadmin(update, context):
     try: tid = int(context.args[0])
     except: await update.message.reply_text("⚠️ `/removeadmin <uid>`", parse_mode=ParseMode.MARKDOWN); return
-    if tid == OWNER_ID: await update.message.reply_text("🚫 Owner can't be removed."); return
+    if tid == OWNER_ID or tid == ADMIN_ID: 
+        await update.message.reply_text("🚫 Can't remove owner or hardcoded admin.")
+        return
     if not db_remove_admin(tid): await update.message.reply_text("❌ Not an admin."); return
     await update.message.reply_text(f"✅ `{tid}` removed.", parse_mode=ParseMode.MARKDOWN)
 
@@ -1281,7 +1315,7 @@ async def on_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "adm_admins":
         ids   = db_list_admins()
-        lines = [f"👑 `{OWNER_ID}` (owner)"] + [f"🛠️ `{i}`" for i in ids]
+        lines = [f"👑 `{OWNER_ID}` (owner)", f"🛠️ `{ADMIN_ID}` (admin)"] + [f"🛠️ `{i}`" for i in ids]
         text  = "👑 *Admins*\n\n" + "\n".join(lines)
         if is_owner: text += "\n\n`/addadmin <uid>` · `/removeadmin <uid>`"
         await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=admin_back())

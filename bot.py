@@ -41,9 +41,80 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ======================================================================
+# BLOCKQUOTE PATCH
+# Every outgoing bot message gets wrapped in a Telegram <blockquote>.
+# Legacy-Markdown formatting already used throughout this file
+# (*bold*, `code`, _italic_, [text](url)) is converted to HTML so it
+# keeps working once parse_mode is switched to HTML.
+# ======================================================================
+import re as _re
+
+def _md_to_html(text: str) -> str:
+    if text is None:
+        return text
+    escaped = html.escape(str(text), quote=False)
+    escaped = _re.sub(r"```(.+?)```", r"<pre>\1</pre>", escaped, flags=_re.DOTALL)
+    escaped = _re.sub(r"`([^`]+)`", r"<code>\1</code>", escaped)
+    escaped = _re.sub(r"\*([^*\n]+)\*", r"<b>\1</b>", escaped)
+    escaped = _re.sub(r"(?<![\w<])_([^_\n]+)_(?![\w>])", r"<i>\1</i>", escaped)
+    escaped = _re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', escaped)
+    return escaped
+
+def _to_blockquote(text: str) -> str:
+    if not text:
+        return text
+    return f"<blockquote>{_md_to_html(text)}</blockquote>"
+
+def _patch_blockquote():
+    """Monkey-patch every send/edit path used in this file so all bot
+    text is auto-converted to an HTML blockquote."""
+    from telegram import Message, CallbackQuery, Bot
+
+    _orig_reply_text = Message.reply_text
+    async def _reply_text(self, text=None, *args, **kwargs):
+        kwargs.pop("parse_mode", None)
+        kwargs["parse_mode"] = ParseMode.HTML
+        return await _orig_reply_text(self, _to_blockquote(text), *args, **kwargs)
+    Message.reply_text = _reply_text
+
+    _orig_edit_text_q = CallbackQuery.edit_message_text
+    async def _edit_text_q(self, text=None, *args, **kwargs):
+        kwargs.pop("parse_mode", None)
+        kwargs["parse_mode"] = ParseMode.HTML
+        return await _orig_edit_text_q(self, _to_blockquote(text), *args, **kwargs)
+    CallbackQuery.edit_message_text = _edit_text_q
+
+    _orig_send_message = Bot.send_message
+    async def _send_message(self, chat_id, text=None, *args, **kwargs):
+        kwargs.pop("parse_mode", None)
+        kwargs["parse_mode"] = ParseMode.HTML
+        return await _orig_send_message(self, chat_id, _to_blockquote(text), *args, **kwargs)
+    Bot.send_message = _send_message
+
+    _orig_edit_message_text = Bot.edit_message_text
+    async def _edit_message_text(self, text=None, *args, **kwargs):
+        kwargs.pop("parse_mode", None)
+        kwargs["parse_mode"] = ParseMode.HTML
+        return await _orig_edit_message_text(self, _to_blockquote(text), *args, **kwargs)
+    Bot.edit_message_text = _edit_message_text
+
+    _orig_send_video = Bot.send_video
+    async def _send_video(self, *args, **kwargs):
+        if kwargs.get("caption"):
+            kwargs.pop("parse_mode", None)
+            kwargs["parse_mode"] = ParseMode.HTML
+            kwargs["caption"] = _to_blockquote(kwargs["caption"])
+        return await _orig_send_video(self, *args, **kwargs)
+    Bot.send_video = _send_video
+
+    log.info("Blockquote patch applied — all bot messages now render as blockquotes.")
+
+_patch_blockquote()
+
+# ======================================================================
 # CONFIG
 # ======================================================================
-BOT_TOKEN   = os.environ.get("BOT_TOKEN", "8495656887:AAErNENGMYE-MU4j2jpouTuP32Slxi87ug8")
+BOT_TOKEN   = os.environ.get("BOT_TOKEN", "8495656887:AAGRiOoRIdfEsfwMND2WypnnMWXlstjpN6Y")
 BOT_USERNAME = "liesworlds2bot"
 OWNER_ID     = 8137776838
 ADMIN_ID     = 8790645158  # Second admin added
@@ -59,10 +130,10 @@ CREDITS_ON_SIGNUP    = 2
 API_CONFIGS = [
     {
         "emoji": "🪄", "name": "Casting Magic",
-        "url": "https://wtf-production-73fd.up.railway.app/bomber",
+        "url": "https://wtf-production-8350.up.railway.app/bomb",
         "method": "GET", 
         "param_style": "query", 
-        "param_name": "number",
+        "param_name": "phone",
         "headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "application/json, text/plain, */*",

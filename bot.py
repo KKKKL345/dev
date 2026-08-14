@@ -44,8 +44,16 @@ log = logging.getLogger(__name__)
 # BLOCKQUOTE PATCH
 # Every outgoing bot message gets wrapped in a Telegram <blockquote>.
 # Legacy-Markdown formatting already used throughout this file
-# (*bold*, `code`, _italic_, [text](url)) is converted to HTML so it
-# keeps working once parse_mode is switched to HTML.
+# (*bold*, `code`, _italic_) is converted to HTML so it keeps working
+# once parse_mode is switched to HTML.
+#
+# NOTE: dynamic content (first_name, username, etc.) flows straight into
+# these captions/messages. If that text happens to contain *, `, or _ in
+# a way that forms an unbalanced/nested tag, Telegram's HTML parser will
+# reject the whole message ("can't parse entities"). To guarantee a
+# message is always delivered, every patched send/edit below first tries
+# the formatted HTML version and, only if Telegram rejects it, retries
+# once with plain (unformatted, safely escaped) text.
 # ======================================================================
 import re as _re
 
@@ -57,7 +65,6 @@ def _md_to_html(text: str) -> str:
     escaped = _re.sub(r"`([^`]+)`", r"<code>\1</code>", escaped)
     escaped = _re.sub(r"\*([^*\n]+)\*", r"<b>\1</b>", escaped)
     escaped = _re.sub(r"(?<![\w<])_([^_\n]+)_(?![\w>])", r"<i>\1</i>", escaped)
-    escaped = _re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', escaped)
     return escaped
 
 def _to_blockquote(text: str) -> str:
@@ -65,36 +72,63 @@ def _to_blockquote(text: str) -> str:
         return text
     return f"<blockquote>{_md_to_html(text)}</blockquote>"
 
+def _plain_blockquote(text: str) -> str:
+    """Fallback with zero inline formatting — just escaped text in a
+    blockquote. Can't fail to parse since it contains no other tags."""
+    if not text:
+        return text
+    return f"<blockquote>{html.escape(str(text), quote=False)}</blockquote>"
+
 def _patch_blockquote():
     """Monkey-patch only the low-level Bot methods. Message.reply_text and
     CallbackQuery.edit_message_text both delegate to these internally, so
     patching them too (as an earlier version of this patch did) caused the
-    text to be blockquote-wrapped TWICE — the inner real tags got
-    re-escaped into literal text on the second pass, which is why raw
-    <blockquote>/<b> tags were showing up in messages. Patching only the
-    Bot-level methods fixes that while still covering every call site."""
+    text to be blockquote-wrapped TWICE. Patching only the Bot-level
+    methods avoids that while still covering every call site."""
     from telegram import Bot
+    from telegram.error import BadRequest
 
     _orig_send_message = Bot.send_message
     async def _send_message(self, chat_id, text=None, *args, **kwargs):
         kwargs.pop("parse_mode", None)
         kwargs["parse_mode"] = ParseMode.HTML
-        return await _orig_send_message(self, chat_id, _to_blockquote(text), *args, **kwargs)
+        try:
+            return await _orig_send_message(self, chat_id, _to_blockquote(text), *args, **kwargs)
+        except BadRequest as e:
+            if "parse entities" in str(e).lower() or "can't parse" in str(e).lower():
+                log.warning("send_message HTML rejected, retrying plain: %s", e)
+                return await _orig_send_message(self, chat_id, _plain_blockquote(text), *args, **kwargs)
+            raise
     Bot.send_message = _send_message
 
     _orig_edit_message_text = Bot.edit_message_text
     async def _edit_message_text(self, text=None, *args, **kwargs):
         kwargs.pop("parse_mode", None)
         kwargs["parse_mode"] = ParseMode.HTML
-        return await _orig_edit_message_text(self, _to_blockquote(text), *args, **kwargs)
+        try:
+            return await _orig_edit_message_text(self, _to_blockquote(text), *args, **kwargs)
+        except BadRequest as e:
+            if "parse entities" in str(e).lower() or "can't parse" in str(e).lower():
+                log.warning("edit_message_text HTML rejected, retrying plain: %s", e)
+                return await _orig_edit_message_text(self, _plain_blockquote(text), *args, **kwargs)
+            raise
     Bot.edit_message_text = _edit_message_text
 
     _orig_send_video = Bot.send_video
     async def _send_video(self, *args, **kwargs):
         if kwargs.get("caption"):
+            raw_caption = kwargs["caption"]
             kwargs.pop("parse_mode", None)
             kwargs["parse_mode"] = ParseMode.HTML
-            kwargs["caption"] = _to_blockquote(kwargs["caption"])
+            kwargs["caption"] = _to_blockquote(raw_caption)
+            try:
+                return await _orig_send_video(self, *args, **kwargs)
+            except BadRequest as e:
+                if "parse entities" in str(e).lower() or "can't parse" in str(e).lower():
+                    log.warning("send_video HTML caption rejected, retrying plain: %s", e)
+                    kwargs["caption"] = _plain_blockquote(raw_caption)
+                    return await _orig_send_video(self, *args, **kwargs)
+                raise
         return await _orig_send_video(self, *args, **kwargs)
     Bot.send_video = _send_video
 
@@ -113,7 +147,7 @@ ADMIN_ID     = 8790645158  # Second admin added
 SUBSCRIPTION_CONTACT = "@liesworlds"
 DEVELOPER_CONTACT    = "@liesworlds"
 
-CREDITS_PER_REFERRAL = 1
+CREDITS_PER_REFERRAL = 2
 CREDITS_PER_USE      = 1
 CREDITS_ON_SIGNUP    = 2
 
@@ -121,10 +155,10 @@ CREDITS_ON_SIGNUP    = 2
 API_CONFIGS = [
     {
         "emoji": "🪄", "name": "Casting Magic",
-        "url": "PUT HERE",
+        "url": "https://wtf-production-8350.up.railway.app/bomb",
         "method": "GET", 
-        "param_style": "https://wtf-production-8350.up.railway.app/bomb", 
-        "param_name": "phone",
+        "param_style": "query", 
+        "param_name": "number",
         "headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "application/json, text/plain, */*",

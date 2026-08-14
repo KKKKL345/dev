@@ -72,6 +72,16 @@ def _to_blockquote(text: str) -> str:
         return text
     return f"<blockquote>{_md_to_html(text)}</blockquote>"
 
+def _wrap_already_html(text: str) -> str:
+    """For text that was already built as valid HTML by the caller
+    (parse_mode=ParseMode.HTML with real <b>/<code>/<pre> tags in it,
+    e.g. the API-results and /apitest messages) — just wrap it, don't
+    re-escape/re-convert it, or the real tags get corrupted into
+    literal visible text."""
+    if not text:
+        return text
+    return f"<blockquote>{text}</blockquote>"
+
 def _plain_blockquote(text: str) -> str:
     """Fallback with zero inline formatting — just escaped text in a
     blockquote. Can't fail to parse since it contains no other tags."""
@@ -90,10 +100,12 @@ def _patch_blockquote():
 
     _orig_send_message = Bot.send_message
     async def _send_message(self, chat_id, text=None, *args, **kwargs):
+        was_html = kwargs.get("parse_mode") == ParseMode.HTML
         kwargs.pop("parse_mode", None)
         kwargs["parse_mode"] = ParseMode.HTML
+        wrapped = _wrap_already_html(text) if was_html else _to_blockquote(text)
         try:
-            return await _orig_send_message(self, chat_id, _to_blockquote(text), *args, **kwargs)
+            return await _orig_send_message(self, chat_id, wrapped, *args, **kwargs)
         except BadRequest as e:
             if "parse entities" in str(e).lower() or "can't parse" in str(e).lower():
                 log.warning("send_message HTML rejected, retrying plain: %s", e)
@@ -103,10 +115,12 @@ def _patch_blockquote():
 
     _orig_edit_message_text = Bot.edit_message_text
     async def _edit_message_text(self, text=None, *args, **kwargs):
+        was_html = kwargs.get("parse_mode") == ParseMode.HTML
         kwargs.pop("parse_mode", None)
         kwargs["parse_mode"] = ParseMode.HTML
+        wrapped = _wrap_already_html(text) if was_html else _to_blockquote(text)
         try:
-            return await _orig_edit_message_text(self, _to_blockquote(text), *args, **kwargs)
+            return await _orig_edit_message_text(self, wrapped, *args, **kwargs)
         except BadRequest as e:
             if "parse entities" in str(e).lower() or "can't parse" in str(e).lower():
                 log.warning("edit_message_text HTML rejected, retrying plain: %s", e)
@@ -118,9 +132,10 @@ def _patch_blockquote():
     async def _send_video(self, *args, **kwargs):
         if kwargs.get("caption"):
             raw_caption = kwargs["caption"]
+            was_html = kwargs.get("parse_mode") == ParseMode.HTML
             kwargs.pop("parse_mode", None)
             kwargs["parse_mode"] = ParseMode.HTML
-            kwargs["caption"] = _to_blockquote(raw_caption)
+            kwargs["caption"] = _wrap_already_html(raw_caption) if was_html else _to_blockquote(raw_caption)
             try:
                 return await _orig_send_video(self, *args, **kwargs)
             except BadRequest as e:
@@ -155,10 +170,10 @@ CREDITS_ON_SIGNUP    = 2
 API_CONFIGS = [
     {
         "emoji": "🪄", "name": "Casting Magic",
-        "url": "https://wtf-production-8350.up.railway.app/bomb",
+        "url": "https://newbomb-production.up.railway.app//bomb",
         "method": "GET", 
         "param_style": "query", 
-        "param_name": "number",
+        "param_name": "phone",
         "headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "application/json, text/plain, */*",
@@ -169,7 +184,7 @@ API_CONFIGS = [
     },
     {
         "emoji": "🎉", "name": "Adding Sparkle",
-        "url": "https://newbomb-production.up.railway.app//bomb",
+        "url": "https://wtf-production-8350.up.railway.app/bomb?",
         "method": "GET", 
         "param_style": "query", 
         "param_name": "phone",

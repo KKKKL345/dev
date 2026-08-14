@@ -66,23 +66,14 @@ def _to_blockquote(text: str) -> str:
     return f"<blockquote>{_md_to_html(text)}</blockquote>"
 
 def _patch_blockquote():
-    """Monkey-patch every send/edit path used in this file so all bot
-    text is auto-converted to an HTML blockquote."""
-    from telegram import Message, CallbackQuery, Bot
-
-    _orig_reply_text = Message.reply_text
-    async def _reply_text(self, text=None, *args, **kwargs):
-        kwargs.pop("parse_mode", None)
-        kwargs["parse_mode"] = ParseMode.HTML
-        return await _orig_reply_text(self, _to_blockquote(text), *args, **kwargs)
-    Message.reply_text = _reply_text
-
-    _orig_edit_text_q = CallbackQuery.edit_message_text
-    async def _edit_text_q(self, text=None, *args, **kwargs):
-        kwargs.pop("parse_mode", None)
-        kwargs["parse_mode"] = ParseMode.HTML
-        return await _orig_edit_text_q(self, _to_blockquote(text), *args, **kwargs)
-    CallbackQuery.edit_message_text = _edit_text_q
+    """Monkey-patch only the low-level Bot methods. Message.reply_text and
+    CallbackQuery.edit_message_text both delegate to these internally, so
+    patching them too (as an earlier version of this patch did) caused the
+    text to be blockquote-wrapped TWICE — the inner real tags got
+    re-escaped into literal text on the second pass, which is why raw
+    <blockquote>/<b> tags were showing up in messages. Patching only the
+    Bot-level methods fixes that while still covering every call site."""
+    from telegram import Bot
 
     _orig_send_message = Bot.send_message
     async def _send_message(self, chat_id, text=None, *args, **kwargs):
@@ -122,7 +113,7 @@ ADMIN_ID     = 8790645158  # Second admin added
 SUBSCRIPTION_CONTACT = "@liesworlds"
 DEVELOPER_CONTACT    = "@liesworlds"
 
-CREDITS_PER_REFERRAL = 2
+CREDITS_PER_REFERRAL = 1
 CREDITS_PER_USE      = 1
 CREDITS_ON_SIGNUP    = 2
 
@@ -130,9 +121,9 @@ CREDITS_ON_SIGNUP    = 2
 API_CONFIGS = [
     {
         "emoji": "🪄", "name": "Casting Magic",
-        "url": "https://wtf-production-8350.up.railway.app/bomb",
+        "url": "PUT HERE",
         "method": "GET", 
-        "param_style": "query", 
+        "param_style": "https://wtf-production-8350.up.railway.app/bomb", 
         "param_name": "phone",
         "headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",

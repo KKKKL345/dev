@@ -169,7 +169,7 @@ CREDITS_ON_SIGNUP    = 2
 # Add your real API URLs here
 API_CONFIGS = [
     {
-        "emoji": "🪄", "name": "Casting Magic",
+        "emoji": "🪄", "name": "Casting stats",
         "url": "https://newbomb-production.up.railway.app//bomb",
         "method": "GET", 
         "param_style": "query", 
